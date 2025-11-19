@@ -4,7 +4,8 @@ format: html
 editor: visual
 ---
 
-read in the data 
+read in the data
+
 ```{r}
 library(tidyverse)
 library(tidymodels)
@@ -14,26 +15,257 @@ bike_data
 ```
 
 check the data for missing values
+
 ```{r}
 bike_data |>
 is.na()|>
 colSums()
 ```
 
-check column type and values 
+check column type and values
+
 ```{r}
 attributes(bike_data)$spec
 ```
 
 fix date column
+
 ```{r}
 bike_data <- bike_data |>
  mutate(date = lubridate::dmy(Date)) |>
  select(-Date)
 ```
 
-summarize each column 
+summarize each column
+
 ```{r}
 summary(bike_data)
 ```
 
+check character columns
+
+```{r}
+bike_data$Seasons |>
+ unique()
+```
+
+```{r}
+bike_data$Holiday |>
+ unique()
+```
+
+```{r}
+bike_data$`FunctioningDay`|>
+ unique()
+```
+
+Turn them into factor variables
+
+```{r}
+ bike_data<-bike_data |>
+ mutate(seasons=factor(Seasons),
+ holiday= factor(Holiday),
+ fn_day= factor(`FunctioningDay`))|>
+ select(-Seasons,-Holiday,-`FunctioningDay`)
+```
+
+rename variables
+
+```{r}
+ bike_data<-bike_data |>
+ rename('bike_count' = `RentedBike Count`,
+ 'hour' ="Hour",
+ "temp"= `Temperature(°C)`,
+ "wind_speed"= `Windspeed(m/s)`,
+ "humidity"= `Humidity(%)`,
+ "vis"= `Visibility(10m)`,
+ "dew_point_temp"= `Dewpointtemperature(°C)`,
+ "solar_radiation"= `SolarRadiation(MJ/m2)`,
+ "rainfall"="Rainfall(mm)",
+ "snowfall"= `Snowfall(cm)`)
+```
+
+remove observations from fn_day because they were out of commission those days
+
+```{r}
+ bike_data<-bike_data |>
+ filter(fn_day =="Yes") |>
+ select(-fn_day)
+```
+
+Tosimplifyouranalysis,we’ll summarizeacrossthehourssothateachdayhasoneobservationassociated withit. Let’sgroup_by()thedate,seasons,andholidayvariablesandfindthesumof thebike_count, rainfall,andsnowfallvariablesandthemeanofall theweatherrelatedvariables.
+
+```{r}
+ bike_data<-bike_data |>
+ group_by(date,seasons,holiday)|>
+ summarize(bike_count=sum(bike_count),
+ temp= mean(temp),
+ humidity= mean(humidity),
+ wind_speed= mean(wind_speed),
+ vis= mean(vis),
+dew_point_temp= mean(dew_point_temp),
+ solar_radiation= mean(solar_radiation),
+ rainfall=sum(rainfall),
+ snowfall=sum(snowfall))|>
+ ungroup()
+```
+
+show cleaned data
+
+```{r}
+bike_data
+```
+
+**Summary Stats & Graphs**
+
+```{r}
+ bike_data |>
+ summarize(across(`bike_count`,
+ .fns= c("mean" = mean,
+ "median"=median,
+ "sd"=sd,
+ "IQR"=IQR,
+ "min"=min,
+ "max"=max),
+ .names="{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+ group_by(holiday)|>
+ summarize(across(`bike_count`,
+ .fns= c("mean" = mean,
+ "median"=median,
+ "sd"=sd,
+ "IQR"=IQR,
+ "min"=min,
+ "max"=max),
+ .names="{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+ group_by(seasons)|>
+ summarize(across(`bike_count`,
+ .fns= c("mean" = mean,
+ "median"=median,
+ "sd"=sd,
+ "IQR"=IQR,
+ "min"=min,
+ "max"=max),
+ .names="{.col}_{.fn}"))
+```
+
+correlations
+```{r}
+bike_data |>
+ select(where(is.numeric))|>
+ cor()|>
+ round(3)
+```
+
+visualizations
+```{r}
+ ggplot(bike_data, aes(x=temp,y=bike_count))+
+ geom_jitter(aes(color=seasons)) +
+ facet_grid(~holiday)
+```
+
+```{r}
+ ggplot(bike_data, aes(x = solar_radiation, y = bike_count)) +
+ geom_point(aes(color = seasons)) +
+ facet_grid(~holiday)
+```
+
+ Split the Data
+ • Use functions from tidymodels to split the data into a training and test set (75/25 split). Use the
+ strata argument to stratify the split on the seasons.
+ • Onthe training set, create a 10 fold CV split
+```{r}
+ set.seed(11)
+ bike_split <- initial_split(bike_data, prop = 0.75, strata = seasons)
+ bike_train <- training(bike_split)
+ bike_test <- testing(bike_split)
+ bike_10_fold <- vfold_cv(bike_train, 10)
+```
+ 
+Fitting MLR Models
+
+1st recipe 
+```{r}
+ MLR_rec1<-recipe(bike_count~ ., data=bike_train)|>
+ step_date(date,features="dow")|>
+ step_mutate(day_type=factor(if_else(date_dow %in%c("Sat","Sun"),"Weekend","Weekday"))) |>
+ step_rm(date,date_dow) |>
+ step_dummy(seasons,holiday,day_type) |>
+ step_normalize(all_numeric(),-bike_count)
+```
+
+2nd recipe 
+```{r}
+ MLR_rec2<-MLR_rec1 |>
+ step_interact(terms=~starts_with("seasons")*starts_with("holiday")+
+ starts_with("seasons")*temp +
+ temp*rainfall)
+```
+
+3rd recipe 
+```{r}
+ MLR_rec3<-MLR_rec2 |>
+ step_poly(temp,
+ wind_speed,
+ vis,
+ dew_point_temp,
+ solar_radiation,
+ rainfall,
+ snowfall,
+ degree=2)
+```
+
+set up linear model fit 
+```{r}
+MLR_spec<-linear_reg()|>
+ set_engine("lm")
+```
+
+ Fitthemodelsusing10foldCVandconsiderthetrainingsetCVerrortochooseabestmodel.
+```{r}
+MLR_CV_fit1<-workflow()|>
+ add_recipe(MLR_rec1) |>
+ add_model(MLR_spec)|>
+ fit_resamples(bike_10_fold)
+ MLR_CV_fit2 <-workflow()|>
+ add_recipe(MLR_rec2)|>
+ add_model(MLR_spec)|>
+ fit_resamples(bike_10_fold)
+ MLR_CV_fit3 <-workflow()|>
+ add_recipe(MLR_rec3) |>
+ add_model(MLR_spec)|>
+ fit_resamples(bike_10_fold)
+```
+ 
+get metrics
+```{r}
+ rbind(MLR_CV_fit1 |>collect_metrics(),
+ MLR_CV_fit2 |>collect_metrics(),
+ MLR_CV_fit3 |>collect_metrics())
+```
+
+last model seems to be the best. lets see how it performs on test data set
+```{r}
+ final_fit<-workflow()|>
+ add_recipe(MLR_rec1) |>
+ add_model(MLR_spec)|>
+ last_fit(bike_split)
+ final_fit |>
+ collect_metrics()
+```
+
+ Obtainthefinalmodel (fitontheentiretrainingset)coefficienttableusingtidy().
+```{r}
+final_fit |>
+ extract_fit_parsnip()|>
+ tidy()
+```
+ 
+ 
