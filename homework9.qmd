@@ -1,0 +1,39 @@
+---
+title: "Modeling Practice"
+format: html
+editor: visual
+---
+
+read in the data 
+```{r}
+library(tidyverse)
+library(tidymodels)
+bike_data <- read_csv("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv",
+local = locale(encoding = "latin1"))
+bike_data
+```
+
+check the data for missing values
+```{r}
+bike_data |>
+is.na()|>
+colSums()
+```
+
+check column type and values 
+```{r}
+attributes(bike_data)$spec
+```
+
+fix date column
+```{r}
+bike_data <- bike_data |>
+ mutate(date = lubridate::dmy(Date)) |>
+ select(-Date)
+```
+
+summarize each column 
+```{r}
+summary(bike_data)
+```
+
