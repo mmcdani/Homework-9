@@ -4,6 +4,8 @@ format: html
 editor: visual
 editor_options: 
   chunk_output_type: console
+execute:
+  freeze: auto
 ---
 
 read in the data
@@ -337,10 +339,10 @@ rpart.plot(final_tree_fit)
 bagged tree 
 ```{r}
 bag_spec <- bag_tree(
-    min_n = tune(),
-    tree_depth = tune()
+  min_n = tune(),
+  tree_depth = tune()
 ) |>
-  set_engine("rpart", times = 500) |>     # << FIXED ENGINE
+  set_engine("rpart", times = 500) |>
   set_mode("regression")
 
 bag_wf <- workflow() |>
@@ -350,7 +352,7 @@ bag_wf <- workflow() |>
 bag_grid <- grid_regular(
   min_n(range = c(2, 20)),
   tree_depth(range = c(3, 10)),
-  levels = 5
+  levels = 3
 )
 
 set.seed(123)
@@ -376,6 +378,74 @@ vip(bag_fit)
 
 ```
 
+Fit model to CV folds & view metrics across each fold
+
+```{r}
+bag_fit <- bag_wkf |>
+  tune_grid(resamples = train_10_fold,
+            grid = grid_regular(cost_complexity(), levels = 10),
+            metrics = metric_set(rmse, mae))
+
+bag_fit |>
+  collect_metrics(type = 'wide') |>
+  arrange(rmse, mae)
+```
+
+Select the model with the lowest RMSE to finalize
+
+```{r}
+bag_best <- bag_fit |>
+  select_best(metric = 'rmse')
+bag_best
+```
+
+Finalize the workflow using the best model and fit on the full training set
+
+```{r}
+bag_spec <- bag_tree(tree_depth = 10,
+                     min_n = 6,
+                     cost_complexity = tune()) |>
+  set_engine('rpart') |>
+  set_mode('regression')
+
+# workflow
+bag_wkf <- workflow() |>
+  add_recipe(rec) |>
+  add_model(bag_spec)
+```
+
+Fit model to CV folds & view metrics across each fold
+
+```{r}
+bag_fit <- bag_wkf |>
+  tune_grid(resamples = train_10_fold,
+            grid = grid_regular(cost_complexity(), levels = 10),
+            metrics = metric_set(rmse, mae))
+
+bag_fit |>
+  collect_metrics(type = 'wide') |>
+  arrange(rmse, mae)
+```
+
+Select the model with the lowest RMSE to finalize
+
+```{r}
+bag_best <- bag_fit |>
+  select_best(metric = 'rmse')
+bag_best
+```
+
+Finalize the workflow using the best model and fit on the full training set
+
+```{r}
+bag_final <- bag_wkf |>
+  finalize_workflow(bag_best) |>
+  last_fit(data_split, metrics = metric_set(rmse, mae))
+
+bag_final |>
+  collect_metrics()
+```
+
 random forest
 ```{r}
 rf_spec <- rand_forest(trees = 500, min_n = tune(), mtry = tune()) |>
@@ -389,7 +459,7 @@ add_model(rf_spec)
 rf_grid <- grid_regular(
 min_n(range = c(2, 20)),
 mtry(range = c(2, 8)),
-levels = 5
+levels = 3
 )
 
 set.seed(123)
@@ -408,26 +478,33 @@ vip(rf_fit)
 
 compare all models 
 ```{r}
-metrics_all <- bind_rows(
-  lasso_final |> collect_metrics() |> mutate(model = "LASSO"),
-  tree_final |> collect_metrics() |> mutate(model = "Regression Tree"),
-  bag_final |> collect_metrics() |> mutate(model = "Bagged Tree"),
-  rf_final |> collect_metrics() |> mutate(model = "Random Forest"),
-  final_fit |> collect_metrics() |> mutate(model = "MLR")
-)
-
-metrics_all |> select(model, .metric, mean)
-
+rbind(
+  MLR_final |>
+    collect_metrics(type = 'wide') |> 
+    mutate(Model = 'MLR', .before = 'rmse'),
+  LASSO_final |>
+    collect_metrics(type = 'wide') |> 
+    mutate(Model = 'LASSO', .before = 'rmse'),
+  reg_tree_final |>
+    collect_metrics(type = 'wide') |> 
+    mutate(Model = 'TREE', .before = 'rmse'),
+  bag_final |> 
+    collect_metrics(type = 'wide') |> 
+    mutate(Model = 'BAGGED', .before = 'rmse'),
+  rf_final |>
+    collect_metrics(type = 'wide') |> 
+    mutate(Model = 'RF', .before = 'rmse')
+) |>
+  arrange(rmse, mae)
 ```
 
 fit the overall best model on the entire dataset
 ```{r}
-final_best <- workflow() |>
-add_recipe(MLR_rec3) |>
-add_model(MLR_spec) |>
-fit(bike_data)
+rf <- rf_wkf |>
+  finalize_workflow(rf_best) |>
+  fit(data)
 
-final_best |> extract_fit_parsnip() |> tidy()
+rf
 
 ```
 
