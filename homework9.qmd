@@ -8,7 +8,7 @@ execute:
   freeze: auto
 ---
 
-read in the data
+load libraries 
 
 ```{r}
 library(tidyverse)
@@ -18,6 +18,10 @@ library(glmnet)
 library(rpart.plot)
 library(vip)
 library(baguette)
+options(scipen=999)
+```
+read in the data 
+```{r}
 bike_data <- read_csv("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv",
 local = locale(encoding = "latin1"))
 bike_data
@@ -500,11 +504,9 @@ rbind(
 
 fit the overall best model on the entire dataset
 ```{r}
-rf <- rf_wkf |>
-  finalize_workflow(rf_best) |>
-  fit(data)
-
-rf
-
+final_fit <- workflow() |>
+  add_recipe(MLR_rec3) |>
+  add_model(MLR_spec) |>
+  last_fit(bike_split)
 ```
 
