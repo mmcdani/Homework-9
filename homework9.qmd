@@ -9,6 +9,10 @@ read in the data
 ```{r}
 library(tidyverse)
 library(tidymodels)
+library(lubridate)
+library(glmnet)
+library(rpart.plot)
+library(vip)
 bike_data <- read_csv("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv",
 local = locale(encoding = "latin1"))
 bike_data
@@ -93,7 +97,7 @@ remove observations from fn_day because they were out of commission those days
  select(-fn_day)
 ```
 
-Tosimplifyouranalysis,we’ll summarizeacrossthehourssothateachdayhasoneobservationassociated withit. Let’sgroup_by()thedate,seasons,andholidayvariablesandfindthesumof thebike_count, rainfall,andsnowfallvariablesandthemeanofall theweatherrelatedvariables.
+To simplify our analysis, we’ll summarize across the hours so that each day  has one observation associated with it. Let’s group_by() the date,seasons,and holiday variables and find the sumo f the bike_count, rainfall,and snowfall variables and the mean of all the weather related variables.
 
 ```{r}
  bike_data<-bike_data |>
@@ -261,11 +265,154 @@ last model seems to be the best. lets see how it performs on test data set
  collect_metrics()
 ```
 
- Obtainthefinalmodel (fitontheentiretrainingset)coefficienttableusingtidy().
+ Obtain the final model (fit on the entire training set)coefficient table using tidy().
 ```{r}
 final_fit |>
  extract_fit_parsnip()|>
  tidy()
 ```
  
+ lasso regression 
+```{r}
+lasso_spec <- linear_reg(penalty = tune(), mixture = 1) |> set_engine("glmnet")
+
+lasso_wf <- workflow() |>
+add_recipe(MLR_rec1) |>
+add_model(lasso_spec)
+
+lasso_grid <- grid_regular(penalty(range = c(-4, 0)), levels = 20)
+
+set.seed(123)
+lasso_res <- tune_grid(
+lasso_wf,
+resamples = bike_10_fold,
+grid = lasso_grid,
+metrics = metric_set(rmse, mae)
+)
+
+best_lasso <- lasso_res |> select_best("rmse")
+
+lasso_final <- finalize_workflow(lasso_wf, best_lasso) |>
+last_fit(bike_split)
+
+lasso_final |> collect_metrics()
+lasso_final |> extract_fit_parsnip() |> tidy()
+
+```
  
+regression tree
+```{r}
+tree_spec <- decision_tree(cost_complexity = tune(), tree_depth = tune(), min_n = tune()) |>
+set_engine("rpart") |>
+set_mode("regression")
+
+tree_wf <- workflow() |>
+add_recipe(MLR_rec1) |>
+add_model(tree_spec)
+
+tree_grid <- grid_regular(
+cost_complexity(range = c(0.001, 0.1)),
+tree_depth(range = c(2, 10)),
+min_n(range = c(5, 20)),
+levels = 5
+)
+
+set.seed(123)
+tree_res <- tune_grid(tree_wf, resamples = bike_10_fold, grid = tree_grid, metrics = metric_set(rmse, mae))
+best_tree <- tree_res |> select_best("rmse")
+
+tree_final <- finalize_workflow(tree_wf, best_tree) |>
+last_fit(bike_split)
+
+tree_final |> collect_metrics()
+
+final_tree_fit <- tree_final |> extract_fit_parsnip() |> pull_fit_engine()
+rpart.plot(final_tree_fit)
+
+```
+
+bagged tree 
+```{r}
+bag_spec <- bag_tree(trees = 500, min_n = tune(), tree_depth = tune()) |>
+set_engine("rpart") |>
+set_mode("regression")
+
+bag_wf <- workflow() |>
+add_recipe(MLR_rec1) |>
+add_model(bag_spec)
+
+bag_grid <- grid_regular(
+min_n(range = c(2, 20)),
+tree_depth(range = c(3, 10)),
+levels = 5
+)
+
+set.seed(123)
+bag_res <- tune_grid(bag_wf, resamples = bike_10_fold, grid = bag_grid, metrics = metric_set(rmse, mae))
+best_bag <- bag_res |> select_best("rmse")
+
+bag_final <- finalize_workflow(bag_wf, best_bag) |>
+last_fit(bike_split)
+
+bag_final |> collect_metrics()
+
+bag_fit <- bag_final |> extract_fit_parsnip() |> pull_workflow_fit()
+vip(bag_fit)
+
+```
+
+random forest
+```{r}
+rf_spec <- rand_forest(trees = 500, min_n = tune(), mtry = tune()) |>
+set_engine("ranger") |>
+set_mode("regression")
+
+rf_wf <- workflow() |>
+add_recipe(MLR_rec1) |>
+add_model(rf_spec)
+
+rf_grid <- grid_regular(
+min_n(range = c(2, 20)),
+mtry(range = c(2, 8)),
+levels = 5
+)
+
+set.seed(123)
+rf_res <- tune_grid(rf_wf, resamples = bike_10_fold, grid = rf_grid, metrics = metric_set(rmse, mae))
+best_rf <- rf_res |> select_best("rmse")
+
+rf_final <- finalize_workflow(rf_wf, best_rf) |>
+last_fit(bike_split)
+
+rf_final |> collect_metrics()
+
+rf_fit <- rf_final |> extract_fit_parsnip() |> pull_workflow_fit()
+vip(rf_fit)
+
+```
+
+compare all models 
+```{r}
+metrics_all <- bind_rows(
+lasso_final |> collect_metrics() |> mutate(model = "LASSO"),
+tree_final |> collect_metrics() |> mutate(model = "Regression Tree"),
+bag_final |> collect_metrics() |> mutate(model = "Bagged Tree"),
+rf_final |> collect_metrics() |> mutate(model = "Random Forest"),
+mlr_final |> collect_metrics() |> mutate(model = "MLR")
+)
+
+metrics_all |> select(model, .metric, mean)
+
+```
+
+fit the overall best model on the entire dataset
+```{r}
+final_best <- workflow() |>
+add_recipe(MLR_rec3) |>
+add_model(MLR_spec) |>
+fit(bike_data)
+
+final_best |> extract_fit_parsnip() |> tidy()
+
+```
+
